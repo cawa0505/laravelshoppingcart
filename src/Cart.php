@@ -3,6 +3,7 @@
 namespace Gloudemans\Shoppingcart;
 
 use Closure;
+use Illuminate\Database\Connection;
 use Illuminate\Support\Collection;
 use Illuminate\Session\SessionManager;
 use Illuminate\Database\DatabaseManager;
@@ -16,17 +17,20 @@ class Cart
 {
     const DEFAULT_INSTANCE = 'default';
 
+    const COST_SHIPPING = 'shipping';
+    const COST_TRANSACTION = 'transaction';
+
     /**
      * Instance of the session manager.
      *
-     * @var \Illuminate\Session\SessionManager
+     * @var SessionManager
      */
     private $session;
 
     /**
      * Instance of the event dispatcher.
-     * 
-     * @var \Illuminate\Contracts\Events\Dispatcher
+     *
+     * @var Dispatcher
      */
     private $events;
 
@@ -38,15 +42,23 @@ class Cart
     private $instance;
 
     /**
+     * Holds the extra additional costs on the cart
+     *
+     * @var Collection
+     */
+    private $extraCosts;
+
+    /**
      * Cart constructor.
      *
-     * @param \Illuminate\Session\SessionManager      $session
-     * @param \Illuminate\Contracts\Events\Dispatcher $events
+     * @param SessionManager $session
+     * @param Dispatcher $events
      */
     public function __construct(SessionManager $session, Dispatcher $events)
     {
         $this->session = $session;
         $this->events = $events;
+        $this->extraCosts = new Collection();
 
         $this->instance(self::DEFAULT_INSTANCE);
     }
@@ -55,7 +67,7 @@ class Cart
      * Set the current cart instance.
      *
      * @param string|null $instance
-     * @return \Gloudemans\Shoppingcart\Cart
+     * @return Cart
      */
     public function instance($instance = null)
     {
@@ -84,7 +96,7 @@ class Cart
      * @param int|float $qty
      * @param float     $price
      * @param array     $options
-     * @return \Gloudemans\Shoppingcart\CartItem
+     * @return CartItem
      */
     public function add($id, $name = null, $qty = null, $price = null, array $options = [])
     {
@@ -103,8 +115,8 @@ class Cart
         }
 
         $content->put($cartItem->rowId, $cartItem);
-        
-        $this->events->fire('cart.added', $cartItem);
+
+        $this->events->dispatch('cart.added', $cartItem);
 
         $this->session->put($this->instance, $content);
 
@@ -112,11 +124,41 @@ class Cart
     }
 
     /**
+     * Sets/adds an additional cost on the cart.
+     *
+     * @param string $name
+     * @param float $price
+     * @todo add in session
+     */
+    public function addCost($name, $price)
+    {
+        $oldCost = $this->extraCosts->pull($name, 0);
+
+        $this->extraCosts->put($name, $price + $oldCost);
+    }
+
+    /**
+     * Gets an additional cost by name
+     *
+     * @param $name
+     * @param int|null $decimals
+     * @param string|null $decimalPoint
+     * @param string|null $thousandSeparator
+     * @return string
+     */
+    public function getCost($name, $decimals = null, $decimalPoint = null, $thousandSeparator = null)
+    {
+        $cost = $this->extraCosts->get($name, 0);
+
+        return $this->numberFormat($cost, $decimals, $decimalPoint, $thousandSeparator);
+    }
+
+    /**
      * Update the cart item with the given rowId.
      *
      * @param string $rowId
      * @param mixed  $qty
-     * @return \Gloudemans\Shoppingcart\CartItem
+     * @return CartItem
      */
     public function update($rowId, $qty)
     {
@@ -148,7 +190,7 @@ class Cart
             $content->put($cartItem->rowId, $cartItem);
         }
 
-        $this->events->fire('cart.updated', $cartItem);
+        $this->events->dispatch('cart.updated', $cartItem);
 
         $this->session->put($this->instance, $content);
 
@@ -169,7 +211,7 @@ class Cart
 
         $content->pull($cartItem->rowId);
 
-        $this->events->fire('cart.removed', $cartItem);
+        $this->events->dispatch('cart.removed', $cartItem);
 
         $this->session->put($this->instance, $content);
     }
@@ -178,7 +220,7 @@ class Cart
      * Get a cart item from the cart by its rowId.
      *
      * @param string $rowId
-     * @return \Gloudemans\Shoppingcart\CartItem
+     * @return CartItem
      */
     public function get($rowId)
     {
@@ -203,12 +245,12 @@ class Cart
     /**
      * Get the content of the cart.
      *
-     * @return \Illuminate\Support\Collection
+     * @return Collection
      */
     public function content()
     {
         if (is_null($this->session->get($this->instance))) {
-            return new Collection([]);
+            return new Collection();
         }
 
         return $this->session->get($this->instance);
@@ -231,10 +273,10 @@ class Cart
      *
      * @param int    $decimals
      * @param string $decimalPoint
-     * @param string $thousandSeperator
+     * @param string $thousandSeparator
      * @return string
      */
-    public function total($decimals = null, $decimalPoint = null, $thousandSeperator = null)
+    public function total($decimals = null, $decimalPoint = null, $thousandSeparator = null)
     {
         $content = $this->getContent();
 
@@ -242,7 +284,13 @@ class Cart
             return $total + ($cartItem->qty * $cartItem->priceTax);
         }, 0);
 
-        return $this->numberFormat($total, $decimals, $decimalPoint, $thousandSeperator);
+        $totalCost = $this->extraCosts->reduce(function ($total, $cost) {
+            return $total + $cost;
+        }, 0);
+
+        $total += $totalCost;
+
+        return $this->numberFormat($total, $decimals, $decimalPoint, $thousandSeparator);
     }
 
     /**
@@ -250,10 +298,10 @@ class Cart
      *
      * @param int    $decimals
      * @param string $decimalPoint
-     * @param string $thousandSeperator
+     * @param string $thousandSeparator
      * @return float
      */
-    public function tax($decimals = null, $decimalPoint = null, $thousandSeperator = null)
+    public function tax($decimals = null, $decimalPoint = null, $thousandSeparator = null)
     {
         $content = $this->getContent();
 
@@ -261,7 +309,7 @@ class Cart
             return $tax + ($cartItem->qty * $cartItem->tax);
         }, 0);
 
-        return $this->numberFormat($tax, $decimals, $decimalPoint, $thousandSeperator);
+        return $this->numberFormat($tax, $decimals, $decimalPoint, $thousandSeparator);
     }
 
     /**
@@ -269,10 +317,10 @@ class Cart
      *
      * @param int    $decimals
      * @param string $decimalPoint
-     * @param string $thousandSeperator
+     * @param string $thousandSeparator
      * @return float
      */
-    public function subtotal($decimals = null, $decimalPoint = null, $thousandSeperator = null)
+    public function subtotal($decimals = null, $decimalPoint = null, $thousandSeparator = null)
     {
         $content = $this->getContent();
 
@@ -280,14 +328,14 @@ class Cart
             return $subTotal + ($cartItem->qty * $cartItem->price);
         }, 0);
 
-        return $this->numberFormat($subTotal, $decimals, $decimalPoint, $thousandSeperator);
+        return $this->numberFormat($subTotal, $decimals, $decimalPoint, $thousandSeparator);
     }
 
     /**
      * Search the cart content for a cart item matching the given search closure.
      *
      * @param \Closure $search
-     * @return \Illuminate\Support\Collection
+     * @return Collection
      */
     public function search(Closure $search)
     {
@@ -350,17 +398,17 @@ class Cart
     {
         $content = $this->getContent();
 
-        if ($this->storedCartWithIdentifierExists($identifier)) {
-            throw new CartAlreadyStoredException("A cart with identifier {$identifier} was already stored.");
-        }
+        // if ($this->storedCartWithIdentifierExists($identifier)) {
+        //     throw new CartAlreadyStoredException("A cart with identifier {$identifier} was already stored.");
+        // }
 
-        $this->getConnection()->table($this->getTableName())->insert([
+        $this->getConnection()->table($this->getTableName())->updateOrInsert([
             'identifier' => $identifier,
-            'instance' => $this->currentInstance(),
-            'content' => serialize($content)
+            'instance' => $this->currentInstance()],
+            ['content' => serialize($content)
         ]);
 
-        $this->events->fire('cart.stored');
+        $this->events->dispatch('cart.stored');
     }
 
     /**
@@ -390,14 +438,14 @@ class Cart
             $content->put($cartItem->rowId, $cartItem);
         }
 
-        $this->events->fire('cart.restored');
+        $this->events->dispatch('cart.restored');
 
         $this->session->put($this->instance, $content);
 
         $this->instance($currentInstance);
 
-        $this->getConnection()->table($this->getTableName())
-            ->where('identifier', $identifier)->delete();
+        // $this->getConnection()->table($this->getTableName())
+        //     ->where('identifier', $identifier)->delete();
     }
 
     /**
@@ -426,7 +474,7 @@ class Cart
     /**
      * Get the carts content, if there is no cart content set yet, return a new empty Collection
      *
-     * @return \Illuminate\Support\Collection
+     * @return Collection
      */
     protected function getContent()
     {
@@ -445,7 +493,7 @@ class Cart
      * @param int|float $qty
      * @param float     $price
      * @param array     $options
-     * @return \Gloudemans\Shoppingcart\CartItem
+     * @return CartItem
      */
     private function createCartItem($id, $name, $qty, $price, array $options)
     {
@@ -491,7 +539,7 @@ class Cart
     /**
      * Get the database connection.
      *
-     * @return \Illuminate\Database\Connection
+     * @return Connection
      */
     private function getConnection()
     {
@@ -528,10 +576,10 @@ class Cart
      * @param $value
      * @param $decimals
      * @param $decimalPoint
-     * @param $thousandSeperator
+     * @param $thousandSeparator
      * @return string
      */
-    private function numberFormat($value, $decimals, $decimalPoint, $thousandSeperator)
+    private function numberFormat($value, $decimals, $decimalPoint, $thousandSeparator)
     {
         if(is_null($decimals)){
             $decimals = is_null(config('cart.format.decimals')) ? 2 : config('cart.format.decimals');
@@ -539,10 +587,10 @@ class Cart
         if(is_null($decimalPoint)){
             $decimalPoint = is_null(config('cart.format.decimal_point')) ? '.' : config('cart.format.decimal_point');
         }
-        if(is_null($thousandSeperator)){
-            $thousandSeperator = is_null(config('cart.format.thousand_seperator')) ? ',' : config('cart.format.thousand_seperator');
+        if(is_null($thousandSeparator)){
+            $thousandSeparator = is_null(config('cart.format.thousand_seperator')) ? ',' : config('cart.format.thousand_seperator');
         }
 
-        return number_format($value, $decimals, $decimalPoint, $thousandSeperator);
+        return number_format($value, $decimals, $decimalPoint, $thousandSeparator);
     }
 }
