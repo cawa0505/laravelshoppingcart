@@ -202,6 +202,16 @@ class Cart
 
         $this->events->dispatch('cart.updated', $cartItem);
 
+        $user = auth()->user();
+
+        if ($user) { // Store back to DB
+            $this->getConnection()->table($this->getTableName())->updateOrInsert([
+                'identifier' => $user->account,
+                'instance' => $this->currentInstance()],
+                ['content' => serialize($content)
+            ]);
+        }
+
         $this->session->put($this->instance, $content);
 
         return $cartItem;
