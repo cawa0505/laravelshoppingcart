@@ -170,7 +170,7 @@ class Cart
      * @param mixed  $qty
      * @return CartItem
      */
-    public function update($rowId, $qty)
+    public function update($rowId, $qty, $override = true)
     {
         $cartItem = $this->get($rowId);
 
@@ -187,7 +187,7 @@ class Cart
         if ($rowId !== $cartItem->rowId) {
             $content->pull($rowId);
 
-            if ($content->has($cartItem->rowId)) {
+            if ($content->has($cartItem->rowId) && !$override) {
                 $existingCartItem = $this->get($cartItem->rowId);
                 $cartItem->setQuantity($existingCartItem->qty + $cartItem->qty);
             }
