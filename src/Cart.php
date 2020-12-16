@@ -307,7 +307,13 @@ class Cart
 
             }
 
-            return unserialize($stored->content);
+            // return unserialize($stored->content);
+            return unserialize($stored->content)->map(function($item) {
+                $item->qty = floatval($item->qty);
+                $item->price = floatval($item->price);
+
+                return $item;
+            });
         }
 
         if (is_null($this->session->get($this->instance))) {
@@ -549,7 +555,13 @@ class Cart
             if (!$this->is_serialized_string($stored->content)) {
                 return new Collection();
             }
-            return unserialize($stored->content);
+            // return unserialize($stored->content);
+            return unserialize($stored->content)->map(function($item) {
+                $item->qty = floatval($item->qty);
+                $item->price = floatval($item->price);
+
+                return $item;
+            });
         }
 
         $content = $this->session->has($this->instance)
